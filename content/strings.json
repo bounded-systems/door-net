@@ -5,6 +5,6 @@
   },
   "description": {
     "type": "meta",
-    "value": "door-net is netd packaged as a standalone, pinned OCI image. netd is the only egress path"
+    "value": "door-net is netd packaged as a standalone, pinned OCI image.  netd is the only egress path for a box: the box runs --network=none and reaches the network solely through this door, a pinned bun proxy that enforces a host allowlist (NETDALLOW, default api. anthropic."
   }
 }
