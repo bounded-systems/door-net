@@ -1,0 +1,10 @@
+{
+  "name": {
+    "type": "name",
+    "value": "Door Net"
+  },
+  "description": {
+    "type": "meta",
+    "value": "door-net is netd packaged as a standalone, pinned OCI image. netd is the only egress path"
+  }
+}
