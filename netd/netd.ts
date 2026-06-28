@@ -25,15 +25,79 @@
  * supported`), which is exactly what the pod provides.
  */
 import { connect, listen, type Socket } from "bun";
+import { createPublicKey, verify as edVerify } from "node:crypto";
 
 // Import shared daemon infrastructure
 import {
   defaultSocketPath,
   prepareSocket,
   createLogger,
+  call,
 } from "../lib/runtime";
+import { verifyGrantWithKeys, type IssuerKeys } from "../guest-room/mod.ts";
 
 const log = createLogger("netd");
+
+// ── Transit-grant gate (tcp/vsock only) ──────────────────────────────────────
+// On a unix door the mounted socket IS authority (like scout/keeper's unix path).
+// On tcp/vsock the kernel gives no peer identity, so a connecting client must
+// present a SIGNED grant for the "net" door in the CONNECT's `Proxy-Authorization:
+// Bearer <base64(grant)>` header — verified against the concierge's published keys
+// (keyless, fetched + cached) before any tunnel opens. Set when serving tcp.
+let grantRequired = false;
+
+function conciergeSocket(): string {
+  if (process.env.CONCIERGE_SOCK) return process.env.CONCIERGE_SOCK;
+  const runtime = process.env.XDG_RUNTIME_DIR;
+  if (runtime) return `${runtime}/concierged.sock`;
+  return `${process.env.HOME ?? "/tmp"}/.claude-box/concierged.sock`;
+}
+
+let issuerKeys: IssuerKeys | null = null;
+async function fetchIssuerKeys(force = false): Promise<IssuerKeys> {
+  if (issuerKeys && !force) return issuerKeys;
+  issuerKeys = await call<IssuerKeys>(conciergeSocket(), "keys");
+  return issuerKeys;
+}
+
+const grantVerifyWith = (data: string, signature: string, publicKeyPem: string): boolean =>
+  edVerify(null, Buffer.from(data), createPublicKey(publicKeyPem), Buffer.from(signature, "base64"));
+
+/** Test seams: drive the tcp grant gate without a live concierge. */
+export function __setGrantRequired(v: boolean): void { grantRequired = v; }
+export function __setIssuerKeys(k: IssuerKeys | null): void { issuerKeys = k; }
+
+/** Case-insensitive HTTP header lookup from a request head. */
+export function headerValue(headText: string, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  for (const line of headText.split("\r\n").slice(1)) {
+    const i = line.indexOf(":");
+    if (i > 0 && line.slice(0, i).trim().toLowerCase() === lower) return line.slice(i + 1).trim();
+  }
+  return undefined;
+}
+
+/** Verify the signed grant a tcp client presents (Proxy-Authorization: Bearer
+ *  <base64 of the SignedGrant JSON>) for the "net" door. Re-fetches keys once on
+ *  an unknown key (rotation). */
+export async function verifyConnectGrant(authHeader: string | undefined): Promise<{ ok: boolean; reason?: string }> {
+  if (!authHeader || !/^Bearer\s+/i.test(authHeader)) return { ok: false, reason: "no-grant" };
+  let grant: { name?: string; binding?: unknown; signature?: string };
+  try {
+    grant = JSON.parse(Buffer.from(authHeader.replace(/^Bearer\s+/i, ""), "base64").toString("utf-8"));
+  } catch {
+    return { ok: false, reason: "malformed-grant" };
+  }
+  if (grant.name !== "net") return { ok: false, reason: "wrong-door" };
+  const ctx = { audience: process.env.ROOM_ID ?? "", now: Date.now() };
+  // deno-lint-ignore no-explicit-any
+  let v = verifyGrantWithKeys(grant as any, ctx, await fetchIssuerKeys(), grantVerifyWith);
+  if (!v.ok && v.reason === "unknown-key") {
+    // deno-lint-ignore no-explicit-any
+    v = verifyGrantWithKeys(grant as any, ctx, await fetchIssuerKeys(true), grantVerifyWith);
+  }
+  return v;
+}
 
 export const DEFAULT_ALLOW = ["api.anthropic.com", ".anthropic.com"];
 
@@ -100,7 +164,7 @@ function allowed(host: string): boolean {
 }
 
 /** Parse the CONNECT request head and, if allowed, open the upstream tunnel. */
-function onHead(client: Socket<Cx>, headEnd: number): void {
+async function onHead(client: Socket<Cx>, headEnd: number): Promise<void> {
   const text = Buffer.from(client.data.head).toString("latin1");
   const leftover = client.data.head.slice(headEnd + 4); // bytes after \r\n\r\n
   const firstLine = text.slice(0, text.indexOf("\r\n"));
@@ -112,6 +176,20 @@ function onHead(client: Socket<Cx>, headEnd: number): void {
     client.end();
     return;
   }
+
+  // Transit-grant gate (tcp/vsock only): no valid signed "net" grant ⇒ no tunnel.
+  if (grantRequired) {
+    const gate = await verifyConnectGrant(headerValue(text, "proxy-authorization"));
+    if (!gate.ok) {
+      log("DENY", `grant rejected: ${gate.reason}`);
+      client.write(
+        "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Bearer\r\nConnection: close\r\n\r\n",
+      );
+      client.end();
+      return;
+    }
+  }
+
   const [host, portStr] = (target ?? "").split(":");
   const port = Number(portStr || "443");
   if (!host || !allowed(host)) {
@@ -217,8 +295,9 @@ if (!import.meta.main) {
   const caveatInfo = CAVEATS.length ? ` caveats=${CAVEATS.join(",")}` : "";
   if (port) {
     // Bind to 0.0.0.0 so podman machine VM can reach us via host.containers.internal
+    grantRequired = true; // tcp/vsock has no kernel peer identity ⇒ require a signed grant
     listen<Cx>({ hostname: "0.0.0.0", port, socket: handlers });
-    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (fail-closed)`);
+    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (signed-grant gate, fail-closed)`);
   } else {
     prepareSocket(socketPath);
     listen<Cx>({ unix: socketPath, socket: handlers });
@@ -237,8 +316,9 @@ if (!import.meta.main) {
   const caveatInfo = CAVEATS.length ? ` caveats=${CAVEATS.join(",")}` : "";
   if (port) {
     // Bind to 0.0.0.0 so podman machine VM can reach us via host.containers.internal
+    grantRequired = true; // tcp/vsock has no kernel peer identity ⇒ require a signed grant
     listen<Cx>({ hostname: "0.0.0.0", port, socket: handlers });
-    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (fail-closed)`);
+    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (signed-grant gate, fail-closed)`);
   } else {
     prepareSocket(socketPath);
     listen<Cx>({ unix: socketPath, socket: handlers });
