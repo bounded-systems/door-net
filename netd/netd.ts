@@ -46,6 +46,16 @@ const log = createLogger("netd");
 // (keyless, fetched + cached) before any tunnel opens. Set when serving tcp.
 let grantRequired = false;
 
+/** Whether the tcp/vsock serve path requires a signed grant. Default ON
+ *  (fail-closed: an UNKNOWN remote netd must be granted — the transport-split
+ *  rule for an untrusted peer). A LOCAL, co-located scoped netd the box reaches
+ *  over the host loopback / pod gateway is trusted like a mount; it opts OUT with
+ *  `NETD_REQUIRE_GRANT=0` (set by the launcher's `startScopedNetd`). Without the
+ *  opt-out, a scoped netd would 407 the ungranted box it exists to serve. */
+export function grantGateRequired(): boolean {
+  return process.env.NETD_REQUIRE_GRANT !== "0";
+}
+
 function conciergeSocket(): string {
   if (process.env.CONCIERGE_SOCK) return process.env.CONCIERGE_SOCK;
   const runtime = process.env.XDG_RUNTIME_DIR;
@@ -295,9 +305,9 @@ if (!import.meta.main) {
   const caveatInfo = CAVEATS.length ? ` caveats=${CAVEATS.join(",")}` : "";
   if (port) {
     // Bind to 0.0.0.0 so podman machine VM can reach us via host.containers.internal
-    grantRequired = true; // tcp/vsock has no kernel peer identity ⇒ require a signed grant
+    grantRequired = grantGateRequired(); // tcp/vsock has no kernel peer identity; gate unless a local scoped netd opts out
     listen<Cx>({ hostname: "0.0.0.0", port, socket: handlers });
-    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (signed-grant gate, fail-closed)`);
+    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (${grantRequired ? "signed-grant gate" : "no grant gate — local"}, allowlist fail-closed)`);
   } else {
     prepareSocket(socketPath);
     listen<Cx>({ unix: socketPath, socket: handlers });
@@ -316,9 +326,9 @@ if (!import.meta.main) {
   const caveatInfo = CAVEATS.length ? ` caveats=${CAVEATS.join(",")}` : "";
   if (port) {
     // Bind to 0.0.0.0 so podman machine VM can reach us via host.containers.internal
-    grantRequired = true; // tcp/vsock has no kernel peer identity ⇒ require a signed grant
+    grantRequired = grantGateRequired(); // tcp/vsock has no kernel peer identity; gate unless a local scoped netd opts out
     listen<Cx>({ hostname: "0.0.0.0", port, socket: handlers });
-    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (signed-grant gate, fail-closed)`);
+    log("INFO", `listening tcp 0.0.0.0:${port} allow=${ALLOW.join(",")}${caveatInfo} (${grantRequired ? "signed-grant gate" : "no grant gate — local"}, allowlist fail-closed)`);
   } else {
     prepareSocket(socketPath);
     listen<Cx>({ unix: socketPath, socket: handlers });

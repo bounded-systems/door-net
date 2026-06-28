@@ -7,7 +7,7 @@
 import { test, expect, describe, beforeEach, afterAll } from "bun:test";
 import { generateKeyPairSync, sign as nodeSign } from "node:crypto";
 import { signGrant, unix, type DoorGrant, type GrantBinding, type IssuerKeys, type SignedGrant } from "../guest-room/mod.ts";
-import { verifyConnectGrant, headerValue, __setGrantRequired, __setIssuerKeys } from "../netd/netd.ts";
+import { verifyConnectGrant, headerValue, grantGateRequired, __setGrantRequired, __setIssuerKeys } from "../netd/netd.ts";
 
 const kp = generateKeyPairSync("ed25519");
 const pem = kp.publicKey.export({ type: "spki", format: "pem" }) as string;
@@ -32,6 +32,26 @@ beforeEach(() => {
   __setIssuerKeys(keys);
 });
 afterAll(() => __setGrantRequired(false));
+
+describe("grantGateRequired — the tcp gate is default-on, locally opt-out", () => {
+  const saved = process.env.NETD_REQUIRE_GRANT;
+  afterAll(() => {
+    if (saved === undefined) delete process.env.NETD_REQUIRE_GRANT;
+    else process.env.NETD_REQUIRE_GRANT = saved;
+  });
+  test("default (unset) → gate ON (fail-closed for an unknown remote netd)", () => {
+    delete process.env.NETD_REQUIRE_GRANT;
+    expect(grantGateRequired()).toBe(true);
+  });
+  test("NETD_REQUIRE_GRANT=0 → gate OFF (a local scoped netd the box reaches over loopback)", () => {
+    process.env.NETD_REQUIRE_GRANT = "0";
+    expect(grantGateRequired()).toBe(false);
+  });
+  test("any other value → gate ON", () => {
+    process.env.NETD_REQUIRE_GRANT = "1";
+    expect(grantGateRequired()).toBe(true);
+  });
+});
 
 describe("headerValue", () => {
   test("parses a header case-insensitively, skipping the request line", () => {
