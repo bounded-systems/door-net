@@ -20,17 +20,17 @@
     "guest-room": {
       "flake": false,
       "locked": {
-        "lastModified": 1781557771,
-        "narHash": "sha256-2iXN95ClKEQGM+KPN9sEcMQ8zn/gZAMfAkGS5ri8Zao=",
+        "lastModified": 1782619830,
+        "narHash": "sha256-32sU0j71zC6u9HkWuyPtEv7F2HMq62BOLahnJyZsAp0=",
         "owner": "bounded-systems",
         "repo": "guest-room",
-        "rev": "5bc85b634a0a8d698243ba3b708f0420516308ec",
+        "rev": "89e7b0918edf89151ee9e2cc858da0c6742ef289",
         "type": "github"
       },
       "original": {
         "owner": "bounded-systems",
         "repo": "guest-room",
-        "rev": "5bc85b634a0a8d698243ba3b708f0420516308ec",
+        "rev": "89e7b0918edf89151ee9e2cc858da0c6742ef289",
         "type": "github"
       }
     },
