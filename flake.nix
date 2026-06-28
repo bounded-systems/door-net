@@ -11,7 +11,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/9f11f828c213641c2369a9f1fa31fe31557e3156";
 
   # netd needs only the engine + the runtime helper (no contract dep).
-  inputs.guest-room.url = "github:bounded-systems/guest-room/5bc85b634a0a8d698243ba3b708f0420516308ec";
+  inputs.guest-room.url = "github:bounded-systems/guest-room/89e7b0918edf89151ee9e2cc858da0c6742ef289";
   inputs.guest-room.flake = false;
   inputs.door-kit.url = "github:bounded-systems/door-kit/a3ae40e5075e3dbded3db9a0d345f842984a646b";
   inputs.door-kit.flake = false;
@@ -44,6 +44,7 @@
                 mkdir -p $out/app/netd $out/app/lib $out/app/guest-room
                 cp ${./netd/netd.ts} $out/app/netd/netd.ts
                 cp ${./lib/runtime.ts} $out/app/lib/runtime.ts
+                cp ${./guest-room/mod.ts} $out/app/guest-room/mod.ts
                 cp ${./guest-room/daemon.ts} $out/app/guest-room/daemon.ts
                 cp ${./guest-room/protocol.ts} $out/app/guest-room/protocol.ts
               '';
@@ -103,7 +104,7 @@
             type = "app";
             program = "${pkgs.writeShellScriptBin "sync-guest-room" ''
               set -euo pipefail
-              for f in daemon.ts protocol.ts; do
+              for f in daemon.ts mod.ts protocol.ts; do
                 install -m 644 ${guest-room}/$f "$PWD/guest-room/$f"; echo "synced guest-room/$f"
               done
             ''}/bin/sync-guest-room";
@@ -124,7 +125,7 @@
         let pkgs = pkgsFor "aarch64-darwin";
         in {
           guest-room-mirror = pkgs.runCommand "guest-room-mirror" { } ''
-            for f in daemon.ts protocol.ts; do
+            for f in daemon.ts mod.ts protocol.ts; do
               if ! diff -u ${guest-room}/$f ${./guest-room}/$f; then
                 echo "guest-room/$f drifted — run: nix run .#sync-guest-room" >&2; exit 1
               fi
